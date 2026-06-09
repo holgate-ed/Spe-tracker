@@ -614,141 +614,134 @@ function loadApiKeyUI(){
   }
 }
 
-// ── Voice (MediaRecorder → Claude API transcription) ───────────────
-var mediaRecorder=null;
-var audioChunks=[];
+// ── Voice (Web Speech API — works on HTTPS/GitHub Pages) ──────────
+var recognition=null;
+var voiceFinal='';
+var voiceInterim='';
 
 function toggleMic(){
-  var key=getApiKey();
-  if(!key){
-    setFeedback(false,'✗ Paste your Anthropic API key above and click Save Key first.');
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){
+    setFeedback(false,'✗ Speech recognition not supported. Use Safari on iPad or Chrome on desktop.');
     return;
   }
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-    setFeedback(false,'✗ Your browser does not support audio recording. Use Chrome or Edge.');
-    return;
-  }
-  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
-    audioChunks=[];
-    var options={mimeType:'audio/webm'};
-    if(!MediaRecorder.isTypeSupported('audio/webm')) options={mimeType:'audio/ogg'};
-    mediaRecorder=new MediaRecorder(stream,options);
-    mediaRecorder.ondataavailable=function(e){
-      if(e.data&&e.data.size>0) audioChunks.push(e.data);
-    };
-    mediaRecorder.start(250);
-    document.getElementById('mic-btn').style.display='none';
-    document.getElementById('stop-btn').style.display='';
+  recognition=new SR();
+  recognition.continuous=true;
+  recognition.interimResults=true;
+  recognition.lang='en-US';
+  voiceFinal='';
+  voiceInterim='';
+
+  recognition.onstart=function(){
+    setFeedback(true,'🎙️ Listening… speak your full record, then tap Stop & Fill.');
     var tbox=document.getElementById('transcript-box');
     tbox.style.display='block';
-    tbox.textContent='🎙️ Recording… speak your full record, then click Stop & Transcribe.';
-    setFeedback(true,'🎙️ Recording started — speak clearly, then click Stop & Transcribe.');
-  }).catch(function(err){
-    var msg='✗ Mic error: '+err.name;
-    if(err.name==='NotAllowedError'||err.name==='PermissionDeniedError'){
-      msg='✗ Mic permission denied. Click the 🔒 icon in the address bar → reset mic → refresh.';
-    } else if(err.name==='NotFoundError'){
-      msg='✗ No microphone found. Check that a mic is connected and not muted.';
+    tbox.textContent='🎙️ Speak now…';
+  };
+
+  recognition.onresult=function(e){
+    voiceInterim='';
+    for(var i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal) voiceFinal+=e.results[i][0].transcript+' ';
+      else voiceInterim+=e.results[i][0].transcript;
     }
+    var tbox=document.getElementById('transcript-box');
+    tbox.style.display='block';
+    tbox.textContent='Hearing: '+(voiceFinal+voiceInterim).trim();
+  };
+
+  recognition.onerror=function(e){
+    var msg='✗ Mic error: '+e.error;
+    if(e.error==='not-allowed') msg='✗ Mic permission denied. Tap the mic icon in the Safari address bar and allow access.';
+    else if(e.error==='no-speech') msg='✗ No speech detected — tap Record and try again.';
+    else if(e.error==='network') msg='✗ Network error. Check your internet connection.';
     setFeedback(false,msg);
-  });
+    resetMicUI();
+  };
+
+  recognition.onend=function(){
+    // If still supposed to be listening, restart
+    if(document.getElementById('stop-btn').style.display!=='none'){
+      try{ recognition.start(); } catch(e){}
+    }
+  };
+
+  try{
+    recognition.start();
+    document.getElementById('mic-btn').style.display='none';
+    document.getElementById('stop-btn').style.display='';
+  } catch(e){
+    setFeedback(false,'✗ Could not start mic: '+e.message);
+  }
 }
 
 function stopMic(){
-  if(!mediaRecorder){return;}
-  mediaRecorder.stop();
-  // Stop all tracks so mic light turns off
-  mediaRecorder.stream.getTracks().forEach(function(t){t.stop();});
-  document.getElementById('mic-btn').style.display='';
-  document.getElementById('stop-btn').style.display='none';
-  var tbox=document.getElementById('transcript-box');
-  tbox.style.display='block';
-  tbox.textContent='⏳ Transcribing… please wait.';
-  setFeedback(true,'⏳ Sending to Claude for transcription…');
+  if(recognition){
+    recognition.onend=null;
+    recognition.stop();
+    recognition=null;
+  }
+  resetMicUI();
+  var text=(voiceFinal+voiceInterim).trim();
+  voiceFinal=''; voiceInterim='';
+  if(!text){
+    setFeedback(false,'✗ No speech captured. Try again.');
+    document.getElementById('transcript-box').style.display='none';
+    return;
+  }
+  document.getElementById('transcript-box').textContent='Heard: '+text;
+  document.getElementById('cmd-input').value=text;
 
-  mediaRecorder.onstop=function(){
-    var mimeType=audioChunks[0]?audioChunks[0].type||'audio/webm':'audio/webm';
-    var blob=new Blob(audioChunks,{type:mimeType});
-    audioChunks=[];
-    transcribeWithClaude(blob,mimeType);
-  };
-  mediaRecorder=null;
+  // Use Claude API to clean up the transcript if key is available, else parse directly
+  var key=getApiKey();
+  if(key){
+    cleanWithClaude(text);
+  } else {
+    execCommand(text);
+  }
 }
 
-function transcribeWithClaude(blob, mimeType){
-  var reader=new FileReader();
-  reader.onloadend=function(){
-    var base64=reader.result.split(',')[1];
-    var key=getApiKey();
+function resetMicUI(){
+  document.getElementById('mic-btn').style.display='';
+  document.getElementById('stop-btn').style.display='none';
+}
 
-    // Determine media type for API
-    var apiMime=mimeType.split(';')[0];
-    if(!apiMime||apiMime==='audio/webm') apiMime='audio/webm';
-
-    // Claude doesn't have a dedicated audio transcription endpoint,
-    // so we send as a user message with the audio as a file attachment
-    // using the messages API with the audio encoded as base64.
-    // We prompt Claude to transcribe exactly what was said.
-    fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key':key,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:500,
-        messages:[{
-          role:'user',
-          content:[
-            {
-              type:'text',
-              text:'You are a transcription assistant for a generator service company. The user spoke a job record command into their microphone. Transcribe EXACTLY what was said, word for word, with no corrections, no punctuation added, no paraphrasing. Return ONLY the raw transcription text and nothing else.'
-            },
-            {
-              type:'document',
-              source:{
-                type:'base64',
-                media_type:apiMime,
-                data:base64
-              }
-            }
-          ]
-        }]
-      })
-    }).then(function(res){
-      if(!res.ok){
-        return res.json().then(function(e){
-          throw new Error((e.error&&e.error.message)||('HTTP '+res.status));
-        });
-      }
-      return res.json();
-    }).then(function(data){
-      var text='';
-      if(data.content&&data.content.length>0){
-        data.content.forEach(function(block){if(block.type==='text') text+=block.text;});
-      }
-      text=text.trim();
-      if(!text){setFeedback(false,'✗ Transcription returned empty. Try speaking louder or longer.');return;}
-      document.getElementById('transcript-box').textContent='Transcript: '+text;
-      document.getElementById('cmd-input').value=text;
-      execCommand(text);
-    }).catch(function(err){
-      var msg='✗ Transcription failed: '+err.message;
-      if(err.message.indexOf('401')>=0||err.message.toLowerCase().indexOf('auth')>=0){
-        msg='✗ Invalid API key. Re-paste your key above and click Save Key.';
-      } else if(err.message.indexOf('audio')>=0||err.message.indexOf('media')>=0){
-        msg='✗ Audio format not supported by API. Try speaking again.';
+function cleanWithClaude(text){
+  setFeedback(true,'⏳ Cleaning up transcript with Claude…');
+  var key=getApiKey();
+  fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'x-api-key':key,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true'
+    },
+    body:JSON.stringify({
+      model:'claude-haiku-4-5-20251001',
+      max_tokens:300,
+      messages:[{
+        role:'user',
+        content:'You are a voice command cleaner for a generator service job tracker. The user spoke a command and it was transcribed by speech recognition. Clean up any obvious speech-to-text errors, but keep the structure exactly the same. Do NOT add information. Do NOT reformat. Return ONLY the cleaned command text, nothing else.\n\nTranscript: '+text
+      }]
+    })
+  }).then(function(res){ return res.json(); })
+  .then(function(data){
+    var cleaned=text;
+    if(data.content&&data.content[0]&&data.content[0].text){
+      cleaned=data.content[0].text.trim();
+    }
+    document.getElementById('transcript-box').textContent='Cleaned: '+cleaned;
+    document.getElementById('cmd-input').value=cleaned;
+    execCommand(cleaned);
+  }).catch(function(){
+    // If Claude call fails, just parse the raw transcript
+    execCommand(text);
+  });
+}
       }
       setFeedback(false,msg);
       document.getElementById('transcript-box').style.display='none';
-    });
-  };
-  reader.readAsDataURL(blob);
-}
-
 // ── Chips ──────────────────────────────────────────────────────────
 function initChips(){
   var cont=document.getElementById('chips');
