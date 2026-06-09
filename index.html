@@ -626,6 +626,7 @@ function toggleMic(){
     return;
   }
   recognition=new SR();
+  // API key is optional — mic works without it
   recognition.continuous=true;
   recognition.interimResults=true;
   recognition.lang='en-US';
@@ -692,9 +693,9 @@ function stopMic(){
   document.getElementById('transcript-box').textContent='Heard: '+text;
   document.getElementById('cmd-input').value=text;
 
-  // Use Claude API to clean up the transcript if key is available, else parse directly
+  // Use Claude API to clean up if key available, otherwise parse directly
   var key=getApiKey();
-  if(key){
+  if(key && key.length > 10){
     cleanWithClaude(text);
   } else {
     execCommand(text);
