@@ -626,17 +626,30 @@ var voiceInterim='';
 function testMic(){
   var res=document.getElementById('mic-test-result');
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  var lines=[];
-  lines.push('Browser: '+navigator.userAgent.slice(0,60));
-  lines.push('Protocol: '+location.protocol);
-  lines.push('SpeechRecognition: '+(SR?'✓ Available':'✗ NOT available'));
-  lines.push('MediaDevices: '+(navigator.mediaDevices?'✓':'✗'));
+  var out='';
+  out+='Protocol:'+location.protocol+' | ';
+  out+='SR:'+(SR?'YES':'NO')+' | ';
+  out+='MD:'+(navigator.mediaDevices?'YES':'NO')+' | ';
+  out+='UA:'+navigator.userAgent.slice(60,100);
   if(SR){
-    var t=new SR();
-    lines.push('SR object created: ✓');
+    try{
+      var t=new SR();
+      out+=' | new SR:OK';
+      t.onerror=function(e){
+        document.getElementById('mic-test-result').textContent+=' | onerror:'+e.error;
+      };
+      t.onstart=function(){
+        document.getElementById('mic-test-result').textContent+=' | STARTED!';
+        setTimeout(function(){t.stop();},1000);
+      };
+      t.start();
+      out+=' | starting...';
+    }catch(e){
+      out+=' | new SR error:'+e.message;
+    }
   }
-  res.textContent=lines.join(' | ');
-  alert(lines.join('\n'));
+  res.style.cssText='font-size:10px;color:#c00;word-break:break-all;display:block;margin-top:4px';
+  res.textContent=out;
 }
 
 function toggleMic(){
