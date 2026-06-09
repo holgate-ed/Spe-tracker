@@ -96,6 +96,10 @@ td input:focus,td select:focus{background:#eef4ff;border-radius:3px}
     <button class="apikey-save-btn" onclick="saveApiKey()">Save Key</button>
     <span id="apikey-status"></span>
   </div>
+  <div style="margin-bottom:6px">
+    <button onclick="testMic()" style="background:#888;color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer">🔬 Test Mic</button>
+    <span id="mic-test-result" style="font-size:11px;margin-left:8px;color:#555"></span>
+  </div>
   <div class="example">💡 <em>Mary Johnson date today tech TJ unit 22kw error no start 1st event replaced battery warranty 2 year parts and labor status done</em></div>
   <div class="cmd-row">
     <input id="cmd-input" placeholder="Type or dictate a command…"/>
@@ -618,6 +622,22 @@ function loadApiKeyUI(){
 var recognition=null;
 var voiceFinal='';
 var voiceInterim='';
+
+function testMic(){
+  var res=document.getElementById('mic-test-result');
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  var lines=[];
+  lines.push('Browser: '+navigator.userAgent.slice(0,60));
+  lines.push('Protocol: '+location.protocol);
+  lines.push('SpeechRecognition: '+(SR?'✓ Available':'✗ NOT available'));
+  lines.push('MediaDevices: '+(navigator.mediaDevices?'✓':'✗'));
+  if(SR){
+    var t=new SR();
+    lines.push('SR object created: ✓');
+  }
+  res.textContent=lines.join(' | ');
+  alert(lines.join('\n'));
+}
 
 function toggleMic(){
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
